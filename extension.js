@@ -308,8 +308,15 @@ function activate(context) {
     vscode.window.onDidChangeTerminalShellIntegration(() => provider.refresh()),
   )
 
-  // Metro servers start and stop outside this window, so poll while the view is visible.
-  const poll = setInterval(() => tree.visible && provider.refresh(), 15000)
+  // Metro servers start and stop outside this window. Poll them and re-render only when something
+  // changed, so expanded session lists are not re-read every tick.
+  const poll = setInterval(async () => {
+    const metros = await listMetros()
+    if (JSON.stringify(metros) !== JSON.stringify(provider.metros)) {
+      provider.metros = metros
+      provider.refresh()
+    }
+  }, 5000)
   context.subscriptions.push({ dispose: () => clearInterval(poll) })
 
   // Refresh when Claude writes a session file. Debounced because a live session writes constantly.
