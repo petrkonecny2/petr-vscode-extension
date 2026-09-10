@@ -34,14 +34,20 @@ function claudeProjectDir(dir) {
   return path.join(CLAUDE_PROJECTS, dir.replace(/[/.]/g, '-'))
 }
 
-function sessionTitle(file) {
-  const fd = fs.openSync(file, 'r')
-  const buf = Buffer.alloc(256 * 1024)
-  const n = fs.readSync(fd, buf, 0, buf.length, 0)
-  fs.closeSync(fd)
-  const lines = buf.toString('utf8', 0, n).split('\n')
+// Only the head of a transcript is scanned: the title is in the first user message and a session that
+// moved into a worktree does so early. Sessions are append-only, so once a file passes the cap its head
+// never changes and the cache stays valid on size alone.
+const SCAN_CAP = 4 * 1024 * 1024
+const MIN_WORKTREE_MENTIONS = 5
+const sessionCache = new Map()
+
+// One pass over the transcript head: the title comes from the first user message, the worktree from the
+// .worktrees/<name> path Claude's own tool calls touched most. Tool results are ignored because they can
+// quote any path, for example a process listing.
+function scanTranscript(text) {
   let title
-  for (const line of lines) {
+  const counts = new Map()
+  for (const line of text.split('\n')) {
     if (!line.startsWith('{')) continue
     let entry
     try {
@@ -49,32 +55,68 @@ function sessionTitle(file) {
     } catch {
       continue
     }
-    if (entry.type === 'custom-title' && entry.customTitle) return entry.customTitle
+    const content = entry.message?.content
+    if (entry.type === 'custom-title' && entry.customTitle) title = entry.customTitle
     if (entry.type === 'summary' && entry.summary && !title) title = entry.summary
     if (entry.type === 'user' && !entry.isSidechain && !title) {
-      const content = entry.message?.content
       const texts = typeof content === 'string' ? [content] : (content ?? []).filter((c) => c.type === 'text').map((c) => c.text)
       const clean = texts
         .map((t) => t.replace(/<(\w[\w-]*)>[\s\S]*?<\/\1>/g, '').trim())
         .find(Boolean)
       if (clean) title = clean.split('\n')[0].slice(0, 80)
     }
+    if (entry.type === 'assistant' && Array.isArray(content)) {
+      for (const block of content) {
+        if (block.type !== 'tool_use') continue
+        for (const m of JSON.stringify(block.input).matchAll(/\.worktrees\/([A-Za-z0-9._-]+)/g)) counts.set(m[1], (counts.get(m[1]) ?? 0) + 1)
+      }
+    }
   }
-  return title
+  const [name, count] = [...counts].sort((a, b) => b[1] - a[1])[0] ?? []
+  return { title, worktreeName: count >= MIN_WORKTREE_MENTIONS ? name : undefined }
 }
 
-function listSessions(dir) {
+async function sessionInfo(file, size) {
+  const key = `${file}:${Math.min(size, SCAN_CAP)}`
+  if (sessionCache.has(key)) return sessionCache.get(key)
+  const fh = await fs.promises.open(file, 'r')
+  const buf = Buffer.alloc(Math.min(size, SCAN_CAP))
+  const { bytesRead } = await fh.read(buf, 0, buf.length, 0)
+  await fh.close()
+  const text = buf.toString('utf8', 0, bytesRead)
+  const info = scanTranscript(text)
+  sessionCache.set(key, info)
+  return info
+}
+
+async function listSessions(dir) {
   const projectDir = claudeProjectDir(dir)
   if (!fs.existsSync(projectDir)) return []
-  return fs
-    .readdirSync(projectDir)
-    .filter((f) => f.endsWith('.jsonl'))
-    .map((f) => {
+  const files = fs.readdirSync(projectDir).filter((f) => f.endsWith('.jsonl'))
+  const sessions = await Promise.all(
+    files.map(async (f) => {
       const file = path.join(projectDir, f)
-      return { id: path.basename(f, '.jsonl'), file, mtime: fs.statSync(file).mtimeMs, title: sessionTitle(file) }
-    })
-    .filter((s) => s.title)
-    .sort((a, b) => b.mtime - a.mtime)
+      const stat = fs.statSync(file)
+      return { id: path.basename(f, '.jsonl'), file, mtime: stat.mtimeMs, ...(await sessionInfo(file, stat.size)) }
+    }),
+  )
+  return sessions.filter((s) => s.title)
+}
+
+// Sessions per worktree dir. A session started in the root that clearly worked in a worktree is listed there.
+async function sessionsByWorktree(worktrees) {
+  const byDir = new Map(await Promise.all(worktrees.map(async (w) => [w.dir, await listSessions(w.dir)])))
+  const root = worktrees.find((w) => w.isRoot)
+  if (root) {
+    const stay = []
+    for (const s of byDir.get(root.dir)) {
+      const target = worktrees.find((w) => !w.isRoot && w.name === s.worktreeName)
+      target ? byDir.get(target.dir).push(s) : stay.push(s)
+    }
+    byDir.set(root.dir, stay)
+  }
+  for (const list of byDir.values()) list.sort((a, b) => b.mtime - a.mtime)
+  return byDir
 }
 
 function terminalCwd(terminal) {
@@ -148,6 +190,7 @@ class Provider {
     this.onDidChangeTreeData = this.emitter.event
     this.worktrees = []
     this.metros = []
+    this.sessions = new Map()
     this.gen = new Map()
     this.expanded = new Set()
   }
@@ -173,6 +216,7 @@ class Provider {
       const root = repoRoot()
       this.worktrees = root ? listWorktrees(root) : []
       this.metros = await listMetros()
+      this.sessions = await sessionsByWorktree(this.worktrees)
       return this.worktrees.map((w) => ({ kind: 'worktree', id: this.idFor(w, 'worktree'), worktree: w }))
     }
     const w = node.worktree
@@ -185,7 +229,7 @@ class Provider {
             .map((m) => ({ kind: 'metro', id: this.idFor(w, `metro:${m.port}`), worktree: w, metro: m, parent: node })),
         ]
       case 'claude':
-        return listSessions(w.dir).map((s) => ({ kind: 'session', id: this.idFor(w, `session:${s.id}`), worktree: w, session: s, parent: node }))
+        return (this.sessions.get(w.dir) ?? []).map((s) => ({ kind: 'session', id: this.idFor(w, `session:${s.id}`), worktree: w, session: s, parent: node }))
       case 'terminals':
         return [
           { kind: 'newTerminal', id: this.idFor(w, 'newTerminal'), worktree: w, parent: node },
