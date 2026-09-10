@@ -8,7 +8,7 @@ const run = promisify(execFile)
 
 const CLAUDE_PROJECTS = path.join(os.homedir(), '.claude', 'projects')
 
-// Node shapes: { kind: 'worktree'|'claude'|'terminals'|'code'|'metro'|'session'|'terminal'|'newTerminal', id, worktree, ... }
+// Node shapes: { kind: 'worktree'|'claude'|'terminals'|'code'|'jira'|'metro'|'session'|'terminal'|'newTerminal', id, worktree, ... }
 
 function repoRoot() {
   const configured = vscode.workspace.getConfiguration('petrWorkbench').get('repoRoot')
@@ -24,7 +24,9 @@ function listWorktrees(cwd) {
     .map((block, i) => {
       const dir = block.match(/^worktree (.+)$/m)?.[1]
       const branch = block.match(/^branch refs\/heads\/(.+)$/m)?.[1]
-      return { dir, branch, name: i === 0 ? 'Root' : path.basename(dir), isRoot: i === 0 }
+      const name = i === 0 ? 'Root' : path.basename(dir)
+      const ticket = (name.match(/[A-Z]+-\d+/) ?? branch?.match(/[A-Z]+-\d+/))?.[0]
+      return { dir, branch, name, ticket, isRoot: i === 0 }
     })
     .sort((a, b) => (a.isRoot ? -1 : b.isRoot ? 1 : a.name.localeCompare(b.name)))
 }
@@ -248,7 +250,7 @@ class Provider {
     switch (node.kind) {
       case 'worktree':
         return [
-          ...['claude', 'terminals', 'code'].map((kind) => ({ kind, id: this.idFor(w, kind), worktree: w, parent: node })),
+          ...['claude', 'terminals', 'code', ...(w.ticket ? ['jira'] : [])].map((kind) => ({ kind, id: this.idFor(w, kind), worktree: w, parent: node })),
           ...this.metros
             .filter((m) => ownerOf(m.cwd, this.worktrees)?.dir === w.dir)
             .map((m) => ({ kind: 'metro', id: this.idFor(w, `metro:${m.port}`), worktree: w, metro: m, parent: node })),
@@ -317,6 +319,15 @@ class Provider {
         item.id = node.id
         item.iconPath = new vscode.ThemeIcon('terminal')
         item.command = { command: 'petrWorkbench.showTerminal', title: 'Show Terminal', arguments: [node] }
+        return item
+      }
+      case 'jira': {
+        const url = vscode.workspace.getConfiguration('petrWorkbench').get('jiraBaseUrl') + w.ticket
+        const item = new vscode.TreeItem(w.ticket, None)
+        item.id = node.id
+        item.tooltip = url
+        item.iconPath = new vscode.ThemeIcon('link-external')
+        item.command = { command: 'vscode.open', title: 'Open Ticket', arguments: [vscode.Uri.parse(url)] }
         return item
       }
       case 'metro': {

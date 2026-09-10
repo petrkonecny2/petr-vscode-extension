@@ -45,6 +45,11 @@
           "type": "string",
           "default": "",
           "description": "Any folder inside the repo. Defaults to the first workspace folder."
+        },
+        "petrWorkbench.jiraBaseUrl": {
+          "type": "string",
+          "default": "https://strvcom.atlassian.net/browse/",
+          "description": "Prefix for ticket links. The ticket key is taken from the worktree or branch name."
         }
       }
     }
