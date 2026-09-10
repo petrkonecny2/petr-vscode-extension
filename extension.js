@@ -97,28 +97,42 @@ class Provider {
     this.emitter = new vscode.EventEmitter()
     this.onDidChangeTreeData = this.emitter.event
     this.worktrees = []
+    this.gen = new Map()
+    this.expanded = new Set()
   }
 
   refresh() {
     this.emitter.fire()
   }
 
+  // Ids carry a per-worktree generation. VS Code keeps expansion state by id, so bumping the
+  // generation re-renders the subtree as new, collapsed items. This is the only way to collapse a node.
+  idFor(w, suffix) {
+    return `${w.dir}#${this.gen.get(w.dir) ?? 0}:${suffix}`
+  }
+
+  collapse(w) {
+    this.gen.set(w.dir, (this.gen.get(w.dir) ?? 0) + 1)
+    this.expanded.delete(w.dir)
+    this.refresh()
+  }
+
   getChildren(node) {
     if (!node) {
       const root = repoRoot()
       this.worktrees = root ? listWorktrees(root) : []
-      return this.worktrees.map((w) => ({ kind: 'worktree', id: w.dir, worktree: w }))
+      return this.worktrees.map((w) => ({ kind: 'worktree', id: this.idFor(w, 'worktree'), worktree: w }))
     }
     const w = node.worktree
     switch (node.kind) {
       case 'worktree':
-        return ['claude', 'terminals', 'code'].map((kind) => ({ kind, id: `${w.dir}:${kind}`, worktree: w, parent: node }))
+        return ['claude', 'terminals', 'code'].map((kind) => ({ kind, id: this.idFor(w, kind), worktree: w, parent: node }))
       case 'claude':
-        return listSessions(w.dir).map((s) => ({ kind: 'session', id: `${w.dir}:session:${s.id}`, worktree: w, session: s, parent: node }))
+        return listSessions(w.dir).map((s) => ({ kind: 'session', id: this.idFor(w, `session:${s.id}`), worktree: w, session: s, parent: node }))
       case 'terminals':
         return [
-          { kind: 'newTerminal', id: `${w.dir}:newTerminal`, worktree: w, parent: node },
-          ...terminalsFor(w, this.worktrees).map((t) => ({ kind: 'terminal', id: `${w.dir}:terminal:${t.name}:${t.processId}`, worktree: w, terminal: t, parent: node })),
+          { kind: 'newTerminal', id: this.idFor(w, 'newTerminal'), worktree: w, parent: node },
+          ...terminalsFor(w, this.worktrees).map((t) => ({ kind: 'terminal', id: this.idFor(w, `terminal:${t.name}:${t.processId}`), worktree: w, terminal: t, parent: node })),
         ]
       default:
         return []
@@ -195,15 +209,20 @@ function activate(context) {
   const tree = vscode.window.createTreeView('petrWorkbench.tree', { treeDataProvider: provider })
 
   const expand = (node) => tree.reveal(node, { expand: 3 })
+  const toggle = (node) => (provider.expanded.has(node.worktree.dir) ? provider.collapse(node.worktree) : expand(node))
   const newTerminal = (node) => vscode.window.createTerminal({ name: node.worktree.name, cwd: node.worktree.dir }).show()
 
   context.subscriptions.push(
     tree,
     vscode.commands.registerCommand('petrWorkbench.refresh', () => provider.refresh()),
     vscode.commands.registerCommand('petrWorkbench.expandAll', async () => {
-      for (const node of provider.getChildren()) await expand(node)
+      const nodes = provider.getChildren()
+      const allExpanded = nodes.every((n) => provider.expanded.has(n.worktree.dir))
+      for (const node of nodes) allExpanded ? provider.collapse(node.worktree) : await expand(node)
     }),
-    vscode.commands.registerCommand('petrWorkbench.expandWorktree', expand),
+    vscode.commands.registerCommand('petrWorkbench.expandWorktree', toggle),
+    tree.onDidExpandElement((e) => e.element.kind === 'worktree' && provider.expanded.add(e.element.worktree.dir)),
+    tree.onDidCollapseElement((e) => e.element.kind === 'worktree' && provider.expanded.delete(e.element.worktree.dir)),
     vscode.commands.registerCommand('petrWorkbench.openCode', (node) =>
       vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(node.worktree.dir), { forceNewWindow: true }),
     ),
