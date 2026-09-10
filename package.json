@@ -1,0 +1,51 @@
+{
+  "name": "petr-workbench",
+  "displayName": "Petr Workbench",
+  "description": "Worktrees, Claude sessions and terminals in one tree",
+  "version": "0.0.1",
+  "publisher": "petrkonecny",
+  "repository": "https://github.com/petrkonecny2/petr-vscode-extension",
+  "engines": { "vscode": "^1.90.0" },
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "petrWorkbench", "title": "Workbench", "icon": "$(git-branch)" }
+      ]
+    },
+    "views": {
+      "petrWorkbench": [{ "id": "petrWorkbench.tree", "name": "Worktrees" }]
+    },
+    "commands": [
+      { "command": "petrWorkbench.refresh", "title": "Refresh", "icon": "$(refresh)" },
+      { "command": "petrWorkbench.expandAll", "title": "Expand All", "icon": "$(expand-all)" },
+      { "command": "petrWorkbench.expandWorktree", "title": "Expand", "icon": "$(expand-all)" },
+      { "command": "petrWorkbench.openCode", "title": "Open in VS Code" },
+      { "command": "petrWorkbench.newTerminal", "title": "New Terminal", "icon": "$(add)" },
+      { "command": "petrWorkbench.showTerminal", "title": "Show Terminal" },
+      { "command": "petrWorkbench.openSession", "title": "Open Claude Session" },
+      { "command": "petrWorkbench.resumeSessionInTerminal", "title": "Resume in Terminal" }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "petrWorkbench.expandAll", "when": "view == petrWorkbench.tree", "group": "navigation" },
+        { "command": "petrWorkbench.refresh", "when": "view == petrWorkbench.tree", "group": "navigation" }
+      ],
+      "view/item/context": [
+        { "command": "petrWorkbench.expandWorktree", "when": "view == petrWorkbench.tree && viewItem == worktree", "group": "inline" },
+        { "command": "petrWorkbench.newTerminal", "when": "view == petrWorkbench.tree && viewItem == terminals", "group": "inline" },
+        { "command": "petrWorkbench.resumeSessionInTerminal", "when": "view == petrWorkbench.tree && viewItem == session" }
+      ]
+    },
+    "configuration": {
+      "properties": {
+        "petrWorkbench.repoRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Main checkout of the repo. Defaults to the first workspace folder."
+        }
+      }
+    }
+  }
+}
