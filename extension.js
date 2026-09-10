@@ -15,16 +15,16 @@ function repoRoot() {
   return configured || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
 }
 
-function listWorktrees(root) {
-  const out = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: root, encoding: 'utf8' })
+// Git lists the main checkout first, so the tree is the same no matter which worktree's window runs it.
+function listWorktrees(cwd) {
+  const out = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd, encoding: 'utf8' })
   return out
     .split('\n\n')
     .filter(Boolean)
-    .map((block) => {
+    .map((block, i) => {
       const dir = block.match(/^worktree (.+)$/m)?.[1]
       const branch = block.match(/^branch refs\/heads\/(.+)$/m)?.[1]
-      const isRoot = path.resolve(dir) === path.resolve(root)
-      return { dir, branch, name: isRoot ? 'Root' : path.basename(dir), isRoot }
+      return { dir, branch, name: i === 0 ? 'Root' : path.basename(dir), isRoot: i === 0 }
     })
     .sort((a, b) => (a.isRoot ? -1 : b.isRoot ? 1 : a.name.localeCompare(b.name)))
 }

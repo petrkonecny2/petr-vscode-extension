@@ -44,7 +44,7 @@
         "petrWorkbench.repoRoot": {
           "type": "string",
           "default": "",
-          "description": "Main checkout of the repo. Defaults to the first workspace folder."
+          "description": "Any folder inside the repo. Defaults to the first workspace folder."
         }
       }
     }
