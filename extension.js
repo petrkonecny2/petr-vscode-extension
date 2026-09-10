@@ -97,7 +97,7 @@ async function listSessions(dir) {
     files.map(async (f) => {
       const file = path.join(projectDir, f)
       const stat = fs.statSync(file)
-      return { id: path.basename(f, '.jsonl'), file, mtime: stat.mtimeMs, ...(await sessionInfo(file, stat.size)) }
+      return { id: path.basename(f, '.jsonl'), file, originDir: dir, mtime: stat.mtimeMs, ...(await sessionInfo(file, stat.size)) }
     }),
   )
   return sessions.filter((s) => s.title)
@@ -178,6 +178,31 @@ async function focusDevice(deviceName) {
   if (sim) return run('open', ['-a', 'Simulator', '--args', '-CurrentDeviceUDID', sim.udid])
   if (booted.length && !deviceName) return run('open', ['-a', 'Simulator'])
   return run('osascript', ['-e', 'tell application "System Events" to set frontmost of first process whose name contains "qemu" to true'])
+}
+
+// The Claude extension only finds sessions of the folder its window has open. Sessions from another
+// folder are handed to that folder's window through a request file in global storage, which every
+// window of this extension watches. Opening the folder focuses its window or creates one.
+function isCurrentWorkspace(dir) {
+  return (vscode.workspace.workspaceFolders ?? []).some((f) => path.resolve(f.uri.fsPath) === path.resolve(dir))
+}
+
+async function openSession(session, requestFile) {
+  if (isCurrentWorkspace(session.originDir)) return vscode.commands.executeCommand('claude-vscode.editor.open', session.id)
+  fs.writeFileSync(requestFile, JSON.stringify({ dir: session.originDir, sessionId: session.id, at: Date.now() }))
+  return vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(session.originDir), { forceNewWindow: true })
+}
+
+function takeSessionRequest(requestFile) {
+  let request
+  try {
+    request = JSON.parse(fs.readFileSync(requestFile, 'utf8'))
+  } catch {
+    return
+  }
+  if (!isCurrentWorkspace(request.dir) || Date.now() - request.at > 60000) return
+  fs.unlinkSync(requestFile)
+  vscode.commands.executeCommand('claude-vscode.editor.open', request.sessionId)
 }
 
 function ownerOf(cwd, worktrees) {
@@ -315,6 +340,13 @@ class Provider {
 }
 
 function activate(context) {
+  const storageDir = context.globalStorageUri.fsPath
+  fs.mkdirSync(storageDir, { recursive: true })
+  const requestFile = path.join(storageDir, 'open-session.json')
+  takeSessionRequest(requestFile)
+  const requestWatcher = fs.watch(storageDir, () => fs.existsSync(requestFile) && takeSessionRequest(requestFile))
+  context.subscriptions.push({ dispose: () => requestWatcher.close() })
+
   const provider = new Provider()
   const tree = vscode.window.createTreeView('petrWorkbench.tree', { treeDataProvider: provider })
 
@@ -339,11 +371,9 @@ function activate(context) {
     vscode.commands.registerCommand('petrWorkbench.newTerminal', newTerminal),
     vscode.commands.registerCommand('petrWorkbench.focusDevice', (node) => focusDevice(node.metro.devices[0])),
     vscode.commands.registerCommand('petrWorkbench.showTerminal', (node) => node.terminal.show()),
-    vscode.commands.registerCommand('petrWorkbench.openSession', (node) =>
-      vscode.commands.executeCommand('claude-vscode.editor.open', node.session.id),
-    ),
+    vscode.commands.registerCommand('petrWorkbench.openSession', (node) => openSession(node.session, requestFile)),
     vscode.commands.registerCommand('petrWorkbench.resumeSessionInTerminal', (node) => {
-      const t = vscode.window.createTerminal({ name: node.session.title, cwd: node.worktree.dir })
+      const t = vscode.window.createTerminal({ name: node.session.title, cwd: node.session.originDir })
       t.sendText(`claude --resume ${node.session.id}`)
       t.show()
     }),
