@@ -2,11 +2,13 @@ const vscode = require('vscode')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { execFileSync } = require('child_process')
+const { execFileSync, execFile } = require('child_process')
+const { promisify } = require('util')
+const run = promisify(execFile)
 
 const CLAUDE_PROJECTS = path.join(os.homedir(), '.claude', 'projects')
 
-// Node shapes: { kind: 'worktree'|'claude'|'terminals'|'code'|'session'|'terminal'|'newTerminal', id, worktree, ... }
+// Node shapes: { kind: 'worktree'|'claude'|'terminals'|'code'|'metro'|'session'|'terminal'|'newTerminal', id, worktree, ... }
 
 function repoRoot() {
   const configured = vscode.workspace.getConfiguration('petrWorkbench').get('repoRoot')
@@ -85,11 +87,40 @@ function terminalsFor(worktree, worktrees) {
   return vscode.window.terminals.filter((t) => {
     const cwd = terminalCwd(t)
     if (!cwd) return worktree.isRoot
-    const owner = worktrees
-      .filter((w) => cwd === w.dir || cwd.startsWith(w.dir + path.sep))
-      .sort((a, b) => b.dir.length - a.dir.length)[0]
-    return owner?.dir === worktree.dir
+    return ownerOf(cwd, worktrees)?.dir === worktree.dir
   })
+}
+
+// Parse lsof -F output into one record per process: { pid, names: [...] }.
+function lsofRecords(out) {
+  const records = []
+  for (const line of out.split('\n')) {
+    if (line[0] === 'p') records.push({ pid: Number(line.slice(1)), names: [] })
+    else if (line[0] === 'n') records.at(-1)?.names.push(line.slice(1))
+  }
+  return records
+}
+
+// Metro servers on this machine: [{ pid, port, cwd }]. Any node process that listens on TCP and answers
+// Metro's /status endpoint counts. The cwd tells which worktree it belongs to.
+async function listMetros() {
+  const listening = await run('lsof', ['-c', 'node', '-a', '-iTCP', '-sTCP:LISTEN', '-P', '-n', '-Fpn']).then((r) => lsofRecords(r.stdout), () => [])
+  if (!listening.length) return []
+  const cwds = await run('lsof', ['-a', '-p', listening.map((r) => r.pid).join(','), '-d', 'cwd', '-Fpn']).then((r) => lsofRecords(r.stdout), () => [])
+  const cwdOf = new Map(cwds.map((r) => [r.pid, r.names[0]]))
+  const candidates = listening.flatMap((r) =>
+    r.names.map((n) => ({ pid: r.pid, port: Number(n.split(':').pop()), cwd: cwdOf.get(r.pid) })).filter((c) => c.cwd && c.port),
+  )
+  const checks = candidates.map((c) =>
+    fetch(`http://localhost:${c.port}/status`, { signal: AbortSignal.timeout(1000) })
+      .then((res) => res.text())
+      .then((text) => (text.startsWith('packager-status:running') ? c : null), () => null),
+  )
+  return (await Promise.all(checks)).filter(Boolean).sort((a, b) => a.port - b.port)
+}
+
+function ownerOf(cwd, worktrees) {
+  return worktrees.filter((w) => cwd === w.dir || cwd.startsWith(w.dir + path.sep)).sort((a, b) => b.dir.length - a.dir.length)[0]
 }
 
 class Provider {
@@ -97,6 +128,7 @@ class Provider {
     this.emitter = new vscode.EventEmitter()
     this.onDidChangeTreeData = this.emitter.event
     this.worktrees = []
+    this.metros = []
     this.gen = new Map()
     this.expanded = new Set()
   }
@@ -117,16 +149,22 @@ class Provider {
     this.refresh()
   }
 
-  getChildren(node) {
+  async getChildren(node) {
     if (!node) {
       const root = repoRoot()
       this.worktrees = root ? listWorktrees(root) : []
+      this.metros = await listMetros()
       return this.worktrees.map((w) => ({ kind: 'worktree', id: this.idFor(w, 'worktree'), worktree: w }))
     }
     const w = node.worktree
     switch (node.kind) {
       case 'worktree':
-        return ['claude', 'terminals', 'code'].map((kind) => ({ kind, id: this.idFor(w, kind), worktree: w, parent: node }))
+        return [
+          ...['claude', 'terminals', 'code'].map((kind) => ({ kind, id: this.idFor(w, kind), worktree: w, parent: node })),
+          ...this.metros
+            .filter((m) => ownerOf(m.cwd, this.worktrees)?.dir === w.dir)
+            .map((m) => ({ kind: 'metro', id: this.idFor(w, `metro:${m.port}`), worktree: w, metro: m, parent: node })),
+        ]
       case 'claude':
         return listSessions(w.dir).map((s) => ({ kind: 'session', id: this.idFor(w, `session:${s.id}`), worktree: w, session: s, parent: node }))
       case 'terminals':
@@ -193,6 +231,15 @@ class Provider {
         item.command = { command: 'petrWorkbench.showTerminal', title: 'Show Terminal', arguments: [node] }
         return item
       }
+      case 'metro': {
+        const item = new vscode.TreeItem(`Metro :${node.metro.port}`, None)
+        item.id = node.id
+        item.description = path.relative(w.dir, node.metro.cwd)
+        item.tooltip = `pid ${node.metro.pid}`
+        item.iconPath = new vscode.ThemeIcon('server-process')
+        item.command = { command: 'vscode.open', title: 'Open', arguments: [vscode.Uri.parse(`http://localhost:${node.metro.port}`)] }
+        return item
+      }
       case 'newTerminal': {
         const item = new vscode.TreeItem('New terminal', None)
         item.id = node.id
@@ -216,7 +263,7 @@ function activate(context) {
     tree,
     vscode.commands.registerCommand('petrWorkbench.refresh', () => provider.refresh()),
     vscode.commands.registerCommand('petrWorkbench.expandAll', async () => {
-      const nodes = provider.getChildren()
+      const nodes = await provider.getChildren()
       const allExpanded = nodes.every((n) => provider.expanded.has(n.worktree.dir))
       for (const node of nodes) allExpanded ? provider.collapse(node.worktree) : await expand(node)
     }),
@@ -240,6 +287,10 @@ function activate(context) {
     vscode.window.onDidCloseTerminal(() => provider.refresh()),
     vscode.window.onDidChangeTerminalShellIntegration(() => provider.refresh()),
   )
+
+  // Metro servers start and stop outside this window, so poll while the view is visible.
+  const poll = setInterval(() => tree.visible && provider.refresh(), 15000)
+  context.subscriptions.push({ dispose: () => clearInterval(poll) })
 
   // Refresh when Claude writes a session file. Debounced because a live session writes constantly.
   if (fs.existsSync(CLAUDE_PROJECTS)) {
