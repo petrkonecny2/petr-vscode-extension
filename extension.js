@@ -366,8 +366,11 @@ function activate(context) {
 
   const expand = (node) => tree.reveal(node, { expand: 3 })
   const toggle = (node) => (provider.expanded.has(node.worktree.dir) ? provider.collapse(node.worktree) : expand(node))
+  // Expands the matching worktrees, or collapses them if every match is already expanded.
   const expandWhere = async (test) => {
-    for (const node of await provider.getChildren()) if (test(node.worktree)) await expand(node)
+    const nodes = (await provider.getChildren()).filter((n) => test(n.worktree))
+    const allExpanded = nodes.length > 0 && nodes.every((n) => provider.expanded.has(n.worktree.dir))
+    for (const node of nodes) allExpanded ? provider.collapse(node.worktree) : await expand(node)
   }
   const newTerminal = (node) => vscode.window.createTerminal({ name: node.worktree.name, cwd: node.worktree.dir }).show()
 
