@@ -366,6 +366,9 @@ function activate(context) {
 
   const expand = (node) => tree.reveal(node, { expand: 3 })
   const toggle = (node) => (provider.expanded.has(node.worktree.dir) ? provider.collapse(node.worktree) : expand(node))
+  const expandWhere = async (test) => {
+    for (const node of await provider.getChildren()) if (test(node.worktree)) await expand(node)
+  }
   const newTerminal = (node) => vscode.window.createTerminal({ name: node.worktree.name, cwd: node.worktree.dir }).show()
 
   context.subscriptions.push(
@@ -377,6 +380,12 @@ function activate(context) {
       for (const node of nodes) allExpanded ? provider.collapse(node.worktree) : await expand(node)
     }),
     vscode.commands.registerCommand('petrWorkbench.expandWorktree', toggle),
+    vscode.commands.registerCommand('petrWorkbench.expandWithTerminals', () =>
+      expandWhere((w) => terminalsFor(w, provider.worktrees).length > 0),
+    ),
+    vscode.commands.registerCommand('petrWorkbench.expandWithMetro', () =>
+      expandWhere((w) => provider.metros.some((m) => ownerOf(m.cwd, provider.worktrees)?.dir === w.dir)),
+    ),
     tree.onDidExpandElement((e) => e.element.kind === 'worktree' && provider.expanded.add(e.element.worktree.dir)),
     tree.onDidCollapseElement((e) => e.element.kind === 'worktree' && provider.expanded.delete(e.element.worktree.dir)),
     vscode.commands.registerCommand('petrWorkbench.openCode', (node) =>

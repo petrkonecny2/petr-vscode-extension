@@ -21,6 +21,8 @@
       { "command": "petrWorkbench.refresh", "title": "Refresh", "icon": "$(refresh)" },
       { "command": "petrWorkbench.expandAll", "title": "Expand All", "icon": "$(expand-all)" },
       { "command": "petrWorkbench.expandWorktree", "title": "Expand", "icon": "$(expand-all)" },
+      { "command": "petrWorkbench.expandWithTerminals", "title": "Expand Worktrees With Terminals", "icon": "$(terminal)" },
+      { "command": "petrWorkbench.expandWithMetro", "title": "Expand Worktrees With Metro", "icon": "$(device-mobile)" },
       { "command": "petrWorkbench.openCode", "title": "Open in VS Code" },
       { "command": "petrWorkbench.newTerminal", "title": "New Terminal", "icon": "$(add)" },
       { "command": "petrWorkbench.showTerminal", "title": "Show Terminal" },
@@ -31,8 +33,10 @@
     ],
     "menus": {
       "view/title": [
-        { "command": "petrWorkbench.expandAll", "when": "view == petrWorkbench.tree", "group": "navigation" },
-        { "command": "petrWorkbench.refresh", "when": "view == petrWorkbench.tree", "group": "navigation" }
+        { "command": "petrWorkbench.expandWithTerminals", "when": "view == petrWorkbench.tree", "group": "navigation@1" },
+        { "command": "petrWorkbench.expandWithMetro", "when": "view == petrWorkbench.tree", "group": "navigation@2" },
+        { "command": "petrWorkbench.expandAll", "when": "view == petrWorkbench.tree", "group": "navigation@3" },
+        { "command": "petrWorkbench.refresh", "when": "view == petrWorkbench.tree", "group": "navigation@4" }
       ],
       "view/item/context": [
         { "command": "petrWorkbench.expandWorktree", "when": "view == petrWorkbench.tree && viewItem == worktree", "group": "inline" },
