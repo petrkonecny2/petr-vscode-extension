@@ -116,7 +116,26 @@ async function listMetros() {
       .then((res) => res.text())
       .then((text) => (text.startsWith('packager-status:running') ? c : null), () => null),
   )
-  return (await Promise.all(checks)).filter(Boolean).sort((a, b) => a.port - b.port)
+  const metros = (await Promise.all(checks)).filter(Boolean).sort((a, b) => a.port - b.port)
+  for (const m of metros) m.devices = await metroDevices(m.port)
+  return metros
+}
+
+// Device names of the apps attached to a Metro server, from its inspector endpoint.
+async function metroDevices(port) {
+  return fetch(`http://localhost:${port}/json/list`, { signal: AbortSignal.timeout(1000) })
+    .then((res) => res.json())
+    .then((list) => [...new Set(list.map((d) => d.deviceName).filter((n) => n && n !== 'Unknown'))], () => [])
+}
+
+// Bring the simulator or emulator running the app to the front. iOS simulators are matched by name to a
+// booted device; anything else is assumed to be the Android emulator.
+async function focusDevice(deviceName) {
+  const booted = await run('xcrun', ['simctl', 'list', 'devices', 'booted', '-j']).then((r) => Object.values(JSON.parse(r.stdout).devices).flat(), () => [])
+  const sim = booted.find((d) => d.name === deviceName)
+  if (sim) return run('open', ['-a', 'Simulator', '--args', '-CurrentDeviceUDID', sim.udid])
+  if (booted.length && !deviceName) return run('open', ['-a', 'Simulator'])
+  return run('osascript', ['-e', 'tell application "System Events" to set frontmost of first process whose name contains "qemu" to true'])
 }
 
 function ownerOf(cwd, worktrees) {
@@ -234,10 +253,10 @@ class Provider {
       case 'metro': {
         const item = new vscode.TreeItem(`Metro :${node.metro.port}`, None)
         item.id = node.id
-        item.description = path.relative(w.dir, node.metro.cwd)
+        item.description = node.metro.devices.join(', ') || path.relative(w.dir, node.metro.cwd)
         item.tooltip = `pid ${node.metro.pid}`
-        item.iconPath = new vscode.ThemeIcon('server-process')
-        item.command = { command: 'vscode.open', title: 'Open', arguments: [vscode.Uri.parse(`http://localhost:${node.metro.port}`)] }
+        item.iconPath = new vscode.ThemeIcon('device-mobile')
+        item.command = { command: 'petrWorkbench.focusDevice', title: 'Show Simulator', arguments: [node] }
         return item
       }
       case 'newTerminal': {
@@ -274,6 +293,7 @@ function activate(context) {
       vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(node.worktree.dir), { forceNewWindow: true }),
     ),
     vscode.commands.registerCommand('petrWorkbench.newTerminal', newTerminal),
+    vscode.commands.registerCommand('petrWorkbench.focusDevice', (node) => focusDevice(node.metro.devices[0])),
     vscode.commands.registerCommand('petrWorkbench.showTerminal', (node) => node.terminal.show()),
     vscode.commands.registerCommand('petrWorkbench.openSession', (node) =>
       vscode.commands.executeCommand('claude-vscode.editor.open', node.session.id),

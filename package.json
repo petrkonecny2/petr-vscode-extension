@@ -24,6 +24,7 @@
       { "command": "petrWorkbench.openCode", "title": "Open in VS Code" },
       { "command": "petrWorkbench.newTerminal", "title": "New Terminal", "icon": "$(add)" },
       { "command": "petrWorkbench.showTerminal", "title": "Show Terminal" },
+      { "command": "petrWorkbench.focusDevice", "title": "Show Simulator" },
       { "command": "petrWorkbench.openSession", "title": "Open Claude Session" },
       { "command": "petrWorkbench.resumeSessionInTerminal", "title": "Resume in Terminal" }
     ],
