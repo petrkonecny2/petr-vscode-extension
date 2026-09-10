@@ -207,6 +207,10 @@ function takeSessionRequest(requestFile) {
   vscode.commands.executeCommand('claude-vscode.editor.open', request.sessionId)
 }
 
+function ticketUrl(worktree) {
+  return vscode.workspace.getConfiguration('petrWorkbench').get('jiraBaseUrl') + worktree.ticket
+}
+
 function ownerOf(cwd, worktrees) {
   return worktrees.filter((w) => cwd === w.dir || cwd.startsWith(w.dir + path.sep)).sort((a, b) => b.dir.length - a.dir.length)[0]
 }
@@ -322,12 +326,11 @@ class Provider {
         return item
       }
       case 'jira': {
-        const url = vscode.workspace.getConfiguration('petrWorkbench').get('jiraBaseUrl') + w.ticket
         const item = new vscode.TreeItem(w.ticket, None)
         item.id = node.id
-        item.tooltip = url
+        item.tooltip = ticketUrl(w)
         item.iconPath = new vscode.ThemeIcon('link-external')
-        item.command = { command: 'vscode.open', title: 'Open Ticket', arguments: [vscode.Uri.parse(url)] }
+        item.command = { command: 'petrWorkbench.openTicket', title: 'Open Ticket', arguments: [node] }
         return item
       }
       case 'metro': {
@@ -380,6 +383,7 @@ function activate(context) {
       vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(node.worktree.dir), { forceNewWindow: true }),
     ),
     vscode.commands.registerCommand('petrWorkbench.newTerminal', newTerminal),
+    vscode.commands.registerCommand('petrWorkbench.openTicket', (node) => vscode.env.openExternal(vscode.Uri.parse(ticketUrl(node.worktree)))),
     vscode.commands.registerCommand('petrWorkbench.focusDevice', (node) => focusDevice(node.metro.devices[0])),
     vscode.commands.registerCommand('petrWorkbench.showTerminal', (node) => node.terminal.show()),
     vscode.commands.registerCommand('petrWorkbench.openSession', (node) => openSession(node.session, requestFile)),

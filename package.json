@@ -25,6 +25,7 @@
       { "command": "petrWorkbench.newTerminal", "title": "New Terminal", "icon": "$(add)" },
       { "command": "petrWorkbench.showTerminal", "title": "Show Terminal" },
       { "command": "petrWorkbench.focusDevice", "title": "Show Simulator" },
+      { "command": "petrWorkbench.openTicket", "title": "Open Ticket" },
       { "command": "petrWorkbench.openSession", "title": "Open Claude Session" },
       { "command": "petrWorkbench.resumeSessionInTerminal", "title": "Resume in Terminal" }
     ],
