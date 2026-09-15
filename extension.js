@@ -26,9 +26,10 @@ function listWorktrees(cwd) {
       const branch = block.match(/^branch refs\/heads\/(.+)$/m)?.[1]
       const name = i === 0 ? 'Root' : path.basename(dir)
       const ticket = (name.match(/[A-Z]+-\d+/) ?? branch?.match(/[A-Z]+-\d+/))?.[0]
-      return { dir, branch, name, ticket, isRoot: i === 0 }
+      const created = fs.existsSync(dir) ? fs.statSync(dir).birthtimeMs : 0
+      return { dir, branch, name, ticket, created, isRoot: i === 0 }
     })
-    .sort((a, b) => (a.isRoot ? -1 : b.isRoot ? 1 : a.name.localeCompare(b.name)))
+    .sort((a, b) => (a.isRoot ? -1 : b.isRoot ? 1 : b.created - a.created))
 }
 
 // Claude stores sessions in a folder named after the cwd with every "/" and "." turned into "-".
@@ -283,7 +284,7 @@ class Provider {
         const item = new vscode.TreeItem(w.name, Collapsed)
         item.id = node.id
         item.description = w.branch
-        item.tooltip = w.dir
+        item.tooltip = `${w.dir}\ncreated ${new Date(w.created).toLocaleDateString()}`
         item.iconPath = new vscode.ThemeIcon(w.isRoot ? 'repo' : 'git-branch')
         item.contextValue = 'worktree'
         return item
